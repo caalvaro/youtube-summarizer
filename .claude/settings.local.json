@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /c/Users/alvar/.claude/projects/C--Users-alvar-Documentos-Projetos-youtube-summarizer/memory/ 2>&1)"
+    ]
+  }
+}
