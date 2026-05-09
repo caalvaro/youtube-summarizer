@@ -55,9 +55,3 @@ illustrator
 
 .. automodule:: youtube_summarizer.illustrator
    :members:
-
-cli
----
-
-.. automodule:: youtube_summarizer.cli
-   :members:
