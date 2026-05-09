@@ -28,3 +28,36 @@ writer
 
 .. automodule:: youtube_summarizer.writer
    :members:
+
+providers
+---------
+
+.. automodule:: youtube_summarizer.providers
+   :members:
+
+.. automodule:: youtube_summarizer.providers.base
+   :members:
+
+.. automodule:: youtube_summarizer.providers.claude
+   :members:
+
+.. automodule:: youtube_summarizer.providers.gemini
+   :members:
+
+framer
+------
+
+.. automodule:: youtube_summarizer.framer
+   :members:
+
+illustrator
+-----------
+
+.. automodule:: youtube_summarizer.illustrator
+   :members:
+
+cli
+---
+
+.. automodule:: youtube_summarizer.cli
+   :members:

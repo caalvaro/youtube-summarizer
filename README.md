@@ -87,11 +87,24 @@ uv tool install youtube-summarizer
 
 ## Setup
 
-Create a `.env` file in your working directory and add your [Anthropic API key](https://console.anthropic.com/):
+Copy the bundled example and add your API key(s):
 
 ```bash
 cp .env.example .env
-# edit .env → ANTHROPIC_API_KEY=sk-ant-...
+# edit .env with your keys (see below)
+```
+
+**Claude (default)** — get a key at [console.anthropic.com](https://console.anthropic.com/):
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Gemini** — get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey):
+
+```
+GOOGLE_API_KEY=AIza...
+YT_SUMMARIZER_PROVIDER=gemini
 ```
 
 ## Usage
@@ -151,7 +164,12 @@ youtube-summarizer run --provider gemini "https://..."
 
 # Override the model
 youtube-summarizer run --model claude-sonnet-4-6 "https://..."
+
+# Smaller LLM segments for long videos or tight token budgets (default: 12000 chars)
+youtube-summarizer run --segment-chars 6000 "https://..."
 ```
+
+`--provider` and `--model` can also be set via `YT_SUMMARIZER_PROVIDER` and `YT_SUMMARIZER_MODEL` environment variables.
 
 ### Exit codes
 
