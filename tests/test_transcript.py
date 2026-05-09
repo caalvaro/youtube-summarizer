@@ -62,9 +62,9 @@ class TestParseVtt:
         texts = [c.text for c in captions]
         # No cue should be a prefix of the next one
         for i in range(len(texts) - 1):
-            assert not texts[i + 1].startswith(
-                texts[i]
-            ), f"Cue {i} is a prefix of cue {i + 1}: {texts[i]!r}"
+            assert not texts[i + 1].startswith(texts[i]), (
+                f"Cue {i} is a prefix of cue {i + 1}: {texts[i]!r}"
+            )
 
     def test_empty_vtt_returns_empty_list(self, tmp_path: Path) -> None:
         p = tmp_path / "empty.vtt"

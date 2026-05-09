@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 import yt_dlp.utils
 from typer.testing import CliRunner
@@ -59,8 +61,9 @@ class TestHelp:
 
     def test_help_lists_provider_flag(self) -> None:
         result = runner.invoke(app, ["run", "--help"])
-        assert "--provider" in result.stdout
-        assert "--model" in result.stdout
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
+        assert "--provider" in plain
+        assert "--model" in plain
 
 
 # ---------------------------------------------------------------------------
