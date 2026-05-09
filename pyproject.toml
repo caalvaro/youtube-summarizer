@@ -1,6 +1,6 @@
 [project]
 name = "youtube-summarizer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Turn YouTube videos into illustrated-ebook markdown summaries with Claude"
 readme = "README.md"
 license = { text = "MIT" }
@@ -15,7 +15,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Multimedia :: Video",
@@ -116,6 +115,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN", "S101"]
 "src/youtube_summarizer/writer.py" = ["E501"]
+# B008: Typer intentionally uses function calls (Argument/Option) in parameter
+# defaults — this is idiomatic Typer and not a real bug.
+"src/youtube_summarizer/cli.py" = ["B008"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["youtube_summarizer"]

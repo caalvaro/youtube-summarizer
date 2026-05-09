@@ -332,9 +332,7 @@ def _build_segment_user_message(
     lines: list[str] = [f"Video title: {title}"]
     if channel:
         lines.append(f"Channel: {channel}")
-    lines.append(
-        f"Segment: {segment_index + 1} of {total_segments}" f"  |  Time: {start_ts}-{end_ts}"
-    )
+    lines.append(f"Segment: {segment_index + 1} of {total_segments}  |  Time: {start_ts}-{end_ts}")
     lines.extend(["", "Transcript chunks (timestamps in seconds):", ""])
     for chunk in chunks:
         ts = (

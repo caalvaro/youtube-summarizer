@@ -16,8 +16,9 @@ import yt_dlp.utils
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from . import downloader, transcript, writer
+from . import downloader, framer, illustrator, transcript, writer
 from .config import OUTPUT_DIR, get_settings
+from .framer import FrameResult
 from .providers import LLMProvider, get_provider
 
 app = typer.Typer(help="Turn a YouTube URL into an illustrated-ebook markdown summary.")
@@ -123,6 +124,127 @@ def run(
     _summarise(info, chunks, provider, summary_path, segment_chars=segment_chars)
 
     console.print(f"[green]Done.[/green] Wrote [bold]{summary_path}[/bold]")
+
+
+@app.command()
+def illustrate(
+    output_dir: Path = typer.Argument(
+        ...,
+        help=("Phase 1 output directory produced by the 'run' command (e.g. output/abc123/)."),
+    ),
+    in_place: bool = typer.Option(
+        False,
+        "--in-place",
+        help=(
+            "Overwrite summary.md in-place instead of writing a separate "
+            "summary_illustrated.md file."
+        ),
+    ),
+    quality: str = typer.Option(
+        "bestvideo[height<=360]",
+        "--quality",
+        help="yt-dlp format selector for the video download.",
+    ),
+    keep_video: bool = typer.Option(
+        False,
+        "--keep-video",
+        help="Keep the downloaded video file after frame extraction.",
+    ),
+    skip_existing: bool = typer.Option(
+        False,
+        "--skip-existing",
+        help="Skip sections whose frame JPEG already exists on disk.",
+    ),
+) -> None:
+    """Phase 2: extract video frames and embed them into the markdown summary."""
+    metadata_path = output_dir / "metadata.json"
+    summary_path = output_dir / "summary.md"
+
+    if not metadata_path.exists():
+        console.print(
+            f"[red]metadata.json not found in {output_dir}. "
+            "Run the 'run' command first to produce Phase 1 output.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    if not summary_path.exists():
+        console.print(
+            f"[red]summary.md not found in {output_dir}. "
+            "Run the 'run' command first to produce Phase 1 output.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]Failed to parse metadata.json: {exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    url: str | None = metadata.get("url")
+    if not url:
+        console.print("[red]metadata.json is missing the 'url' field.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        framer.check_ffmpeg()
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from None
+
+    markdown = summary_path.read_text(encoding="utf-8")
+    try:
+        sections = illustrator.parse_sections(markdown)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    console.print(
+        f"[cyan]Found {len(sections)} section(s) to illustrate.[/cyan] "
+        "Downloading video for frame extraction…"
+    )
+
+    with Progress(
+        SpinnerColumn(spinner_name="line"), TextColumn("{task.description}"), console=console
+    ) as progress:
+        task_id = progress.add_task("Downloading video…", total=None)
+
+        def on_frame(result: FrameResult) -> None:
+            progress.update(
+                task_id,
+                description=(
+                    f"Extracted frame {result.section_index + 1} / {len(sections)}  "
+                    f"(t={result.timestamp:.1f}s)"
+                ),
+            )
+
+        try:
+            frame_results = framer.extract_frames(
+                url,
+                sections,
+                output_dir,
+                quality=quality,
+                keep_video=keep_video,
+                skip_existing=skip_existing,
+                on_frame=on_frame,
+            )
+        except RuntimeError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from None
+
+    if not frame_results:
+        console.print("[red]No frames were extracted — all sections failed.[/red]")
+        raise typer.Exit(code=1)
+
+    frame_map: dict[int, Path] = {r.section_index: r.path for r in frame_results}
+    illustrated = illustrator.embed_frames(markdown, frame_map)
+
+    if in_place:
+        summary_path.write_text(illustrated, encoding="utf-8")
+        console.print(f"[green]Done.[/green] Updated [bold]{summary_path}[/bold] in-place.")
+    else:
+        out_path = output_dir / "summary_illustrated.md"
+        out_path.write_text(illustrated, encoding="utf-8")
+        console.print(f"[green]Done.[/green] Wrote [bold]{out_path}[/bold]")
 
 
 def _summarise(

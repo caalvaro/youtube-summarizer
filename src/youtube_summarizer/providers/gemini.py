@@ -95,7 +95,5 @@ class GeminiProvider:
             if getattr(exc, "code", None) != _HTTP_TOO_MANY_REQUESTS:
                 return False
             # Daily quota exhaustion is not retriable today.
-            if "PerDay" in str(exc):
-                return False
-            return True
+            return "PerDay" not in str(exc)
         return False
