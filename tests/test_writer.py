@@ -1,20 +1,64 @@
-"""Tests for youtube_summarizer.writer."""
+"""Tests for youtube_summarizer.writer.
+
+The writer is now a pure orchestrator — provider-agnostic — so these tests
+inject a :class:`FakeProvider` instead of mocking SDK internals. Provider-
+specific tests (SDK call shape, retry policy, API-key resolution) live under
+``tests/test_providers/``.
+"""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import re
+import warnings
 
-import anthropic
 import pytest
 
-from youtube_summarizer.config import Settings
 from youtube_summarizer.transcript import Chunk
-from youtube_summarizer.writer import _build_user_message, restructure
+from youtube_summarizer.writer import (
+    CONTINUATION_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    _build_user_message,
+    _segment_chunks,
+    restructure,
+    restructure_segmented,
+)
+
+# ---------------------------------------------------------------------------
+# FakeProvider — satisfies the LLMProvider Protocol structurally
+# ---------------------------------------------------------------------------
+
+
+class FakeProvider:
+    """In-memory provider for tests.
+
+    Records every (system, user) call and returns a pre-set response. Replaces
+    the previous pattern of mocking ``anthropic.Anthropic`` deep inside the
+    streaming context manager — much cleaner now that the writer talks to
+    providers through the Protocol.
+    """
+
+    name = "fake"
+    model = "fake-model"
+
+    def __init__(self, response: str = "# Title\n") -> None:
+        self.response = response
+        self.calls: list[dict[str, str]] = []
+
+    def generate(self, *, system: str, user: str) -> str:
+        self.calls.append({"system": system, "user": user})
+        return self.response
+
+
+# A markdown response that satisfies the timestamp-comment contract — used as
+# the default fake response so tests not focused on the contract aren't
+# tripped by the post-condition validator.
+_VALID_MARKDOWN = "# Title\n\n## Section A\n<!-- timestamp: 0.0-45.0 -->\n\nContent here.\n"
 
 
 # ---------------------------------------------------------------------------
 # _build_user_message
 # ---------------------------------------------------------------------------
+
 
 class TestBuildUserMessage:
     def test_contains_title(self, two_chunks: list[Chunk]) -> None:
@@ -49,334 +93,359 @@ class TestBuildUserMessage:
 
 
 # ---------------------------------------------------------------------------
-# restructure (Anthropic client mocked)
+# restructure — orchestration only (provider mocked)
 # ---------------------------------------------------------------------------
-
-# A markdown response that satisfies the timestamp-comment contract — used as
-# the default mock return so tests not focused on the contract aren't tripped
-# by the post-condition validator.
-_VALID_MARKDOWN = (
-    "# Title\n\n## Section A\n<!-- timestamp: 0.0-45.0 -->\n\nContent here.\n"
-)
-
-
-@pytest.fixture(autouse=True)
-def _set_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Override the lazy-settings singleton with a test-safe value.
-
-    The package now reads configuration via :func:`get_settings`, so tests
-    inject a known :class:`Settings` instance instead of patching module-level
-    globals. Tests that want to exercise the missing-key branch override this
-    locally with their own ``Settings(api_key=None)``.
-    """
-    monkeypatch.setattr(
-        "youtube_summarizer.config._settings",
-        Settings(api_key="test-key-not-real", model="claude-test"),
-    )
-
-
-def _make_mock_stream(text: str) -> MagicMock:
-    """Build a minimal mock of the anthropic streaming context manager."""
-    text_block = MagicMock()
-    text_block.type = "text"
-    text_block.text = text
-
-    final_message = MagicMock()
-    final_message.content = [text_block]
-
-    stream = MagicMock()
-    stream.__enter__ = MagicMock(return_value=stream)
-    stream.__exit__ = MagicMock(return_value=False)
-    stream.get_final_message.return_value = final_message
-
-    return stream
 
 
 class TestRestructure:
     def test_returns_string(self, two_chunks: list[Chunk]) -> None:
-        mock_stream = _make_mock_stream(_VALID_MARKDOWN)
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            result = restructure("My Video", "Channel", two_chunks)
-
+        fake = FakeProvider(response=_VALID_MARKDOWN)
+        result = restructure("My Video", "Channel", two_chunks, provider=fake)
         assert isinstance(result, str)
 
-    def test_strips_leading_trailing_whitespace(
-        self, two_chunks: list[Chunk]
-    ) -> None:
-        mock_stream = _make_mock_stream(f"  \n{_VALID_MARKDOWN}  \n")
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            result = restructure("My Video", "Channel", two_chunks)
-
+    def test_strips_leading_trailing_whitespace(self, two_chunks: list[Chunk]) -> None:
+        fake = FakeProvider(response=f"  \n{_VALID_MARKDOWN}  \n")
+        result = restructure("My Video", "Channel", two_chunks, provider=fake)
         assert result == result.strip()
 
     def test_passes_title_in_user_message(self, two_chunks: list[Chunk]) -> None:
-        """The user message sent to the API must contain the video title."""
-        mock_stream = _make_mock_stream(_VALID_MARKDOWN)
-        captured_messages: list[dict] = []
+        """The user message handed to the provider must contain the video title."""
+        fake = FakeProvider(response=_VALID_MARKDOWN)
+        restructure("Unique Title XYZ", "Channel", two_chunks, provider=fake)
+        assert any("Unique Title XYZ" in call["user"] for call in fake.calls)
 
-        def capture_stream(**kwargs: object) -> MagicMock:
-            captured_messages.extend(kwargs.get("messages", []))  # type: ignore[arg-type]
-            return mock_stream
+    def test_passes_system_prompt_to_provider(self, two_chunks: list[Chunk]) -> None:
+        """The system prompt sent to the provider must declare the timestamp contract."""
+        fake = FakeProvider(response=_VALID_MARKDOWN)
+        restructure("T", "C", two_chunks, provider=fake)
+        assert "<!-- timestamp:" in fake.calls[0]["system"]
 
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.side_effect = capture_stream
-            restructure("Unique Title XYZ", "Channel", two_chunks)
-
-        assert any(
-            "Unique Title XYZ" in str(m.get("content", ""))
-            for m in captured_messages
-        )
-
-    def test_passes_api_key_to_client(self, two_chunks: list[Chunk]) -> None:
-        """The Anthropic client must be constructed with the resolved api_key.
-
-        Regression: previously we relied on the SDK reading ``ANTHROPIC_API_KEY``
-        from env at call time, but the guard read it at import time — letting
-        the two diverge silently when env mutated between import and call.
-        """
-        mock_stream = _make_mock_stream(_VALID_MARKDOWN)
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            restructure("Title", "Channel", two_chunks)
-
-        MockClient.assert_called_once_with(api_key="test-key-not-real")
-
-    def test_uses_streaming_api(self, two_chunks: list[Chunk]) -> None:
-        """Restructure must use client.messages.stream, not client.messages.create."""
-        mock_stream = _make_mock_stream(_VALID_MARKDOWN)
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            restructure("Title", "Channel", two_chunks)
-
-        MockClient.return_value.messages.stream.assert_called_once()
-        MockClient.return_value.messages.create.assert_not_called()
-
-    def test_empty_chunks_still_calls_api(self) -> None:
-        # No H2 headings expected → contract is vacuously satisfied.
-        mock_stream = _make_mock_stream("# Output\n")
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            result = restructure("Title", "Channel", [])
-
+    def test_empty_chunks_still_calls_provider(self) -> None:
+        fake = FakeProvider(response="# Output\n")  # no H2 → contract OK
+        result = restructure("Title", "Channel", [], provider=fake)
         assert isinstance(result, str)
+        assert len(fake.calls) == 1
 
-    @pytest.mark.parametrize("missing_value", [None, ""])
-    def test_raises_when_api_key_missing(
+    def test_explicit_provider_used_over_factory_default(
         self,
         two_chunks: list[Chunk],
         monkeypatch: pytest.MonkeyPatch,
-        missing_value: str | None,
     ) -> None:
-        """Regression: the guard must fire when ANTHROPIC_API_KEY is unset or empty.
+        """Injecting an explicit provider must short-circuit the factory.
 
-        The previous implementation tested ``if not anthropic:``, which checks the
-        truthiness of the imported module object — always True — so the guard
-        never fired and users hit a less obvious error inside the SDK instead.
+        Regression guard against accidentally calling get_provider() even when
+        the caller supplied one — that would defeat dependency injection and
+        force every test to also configure env vars.
         """
-        monkeypatch.setattr(
-            "youtube_summarizer.config._settings",
-            Settings(api_key=missing_value, model="claude-test"),
-        )
+        called = {"factory": False}
 
-        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
-            restructure("Title", "Channel", two_chunks)
+        def boom(*_a: object, **_kw: object) -> None:
+            called["factory"] = True
+            raise AssertionError("factory should not have been called")
 
+        monkeypatch.setattr("youtube_summarizer.writer.get_provider", boom)
 
-# ---------------------------------------------------------------------------
-# Edge cases
-# ---------------------------------------------------------------------------
-
-class TestRestructureEdgeCases:
-    def test_multiple_text_blocks_joined(self, two_chunks: list[Chunk]) -> None:
-        """If the API returns multiple text content blocks they must be joined."""
-        block1 = MagicMock()
-        block1.type = "text"
-        block1.text = "# Part one\n\n## Section\n<!-- timestamp: 0.0-1.0 -->"
-
-        block2 = MagicMock()
-        block2.type = "text"
-        block2.text = "\n\nMore content"
-
-        final_message = MagicMock()
-        final_message.content = [block1, block2]
-
-        stream = MagicMock()
-        stream.__enter__ = MagicMock(return_value=stream)
-        stream.__exit__ = MagicMock(return_value=False)
-        stream.get_final_message.return_value = final_message
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = stream
-            result = restructure("Title", "Channel", two_chunks)
-
-        assert "Part one" in result
-        assert "More content" in result
-
-    def test_non_text_blocks_ignored(self, two_chunks: list[Chunk]) -> None:
-        """Tool-use or image blocks in the response must be silently ignored."""
-        text_block = MagicMock()
-        text_block.type = "text"
-        text_block.text = "# Valid markdown"  # no H2, contract vacuously OK
-
-        tool_block = MagicMock()
-        tool_block.type = "tool_use"
-
-        final_message = MagicMock()
-        final_message.content = [tool_block, text_block]
-
-        stream = MagicMock()
-        stream.__enter__ = MagicMock(return_value=stream)
-        stream.__exit__ = MagicMock(return_value=False)
-        stream.get_final_message.return_value = final_message
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = stream
-            result = restructure("Title", "Channel", two_chunks)
-
-        assert result == "# Valid markdown"
+        fake = FakeProvider(response=_VALID_MARKDOWN)
+        restructure("T", "C", two_chunks, provider=fake)
+        assert not called["factory"]
 
 
 # ---------------------------------------------------------------------------
 # Timestamp-comment contract (Phase 2 alignment depends on this)
 # ---------------------------------------------------------------------------
 
+
 class TestTimestampContract:
-    def test_raises_when_h2_present_but_no_timestamps(
-        self, two_chunks: list[Chunk]
-    ) -> None:
+    def test_raises_when_h2_present_but_no_timestamps(self, two_chunks: list[Chunk]) -> None:
         """LLM output with `## ` headings but zero timestamp comments must raise."""
         bad = "# Title\n\n## Section A\n\nContent.\n\n## Section B\n\nMore.\n"
-        mock_stream = _make_mock_stream(bad)
+        fake = FakeProvider(response=bad)
+        with pytest.raises(ValueError, match="timestamp contract"):
+            restructure("Title", "Channel", two_chunks, provider=fake)
 
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            with pytest.raises(ValueError, match="timestamp contract"):
-                restructure("Title", "Channel", two_chunks)
-
-    def test_passes_when_all_timestamps_present(
-        self, two_chunks: list[Chunk]
-    ) -> None:
+    def test_passes_when_all_timestamps_present(self, two_chunks: list[Chunk]) -> None:
         good = (
             "# Title\n\n"
             "## Section A\n<!-- timestamp: 0.0-45.0 -->\n\nFirst.\n\n"
             "## Section B\n<!-- timestamp: 45.0-90.0 -->\n\nSecond.\n"
         )
-        mock_stream = _make_mock_stream(good)
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            result = restructure("Title", "Channel", two_chunks)
-
+        fake = FakeProvider(response=good)
+        result = restructure("Title", "Channel", two_chunks, provider=fake)
         assert "## Section A" in result
         assert "## Section B" in result
 
-    def test_warns_on_partial_timestamp_coverage(
-        self, two_chunks: list[Chunk]
-    ) -> None:
+    def test_warns_on_partial_timestamp_coverage(self, two_chunks: list[Chunk]) -> None:
         partial = (
             "# Title\n\n"
             "## Section A\n<!-- timestamp: 0.0-45.0 -->\n\nFirst.\n\n"
             "## Section B\n\nSecond — no timestamp.\n"
         )
-        mock_stream = _make_mock_stream(partial)
+        fake = FakeProvider(response=partial)
+        with pytest.warns(UserWarning, match="Timestamp contract is partial"):
+            restructure("Title", "Channel", two_chunks, provider=fake)
 
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            with pytest.warns(UserWarning, match="Timestamp contract is partial"):
-                restructure("Title", "Channel", two_chunks)
-
-    def test_no_h2_headings_skips_validation(
-        self, two_chunks: list[Chunk]
-    ) -> None:
+    def test_no_h2_headings_skips_validation(self, two_chunks: list[Chunk]) -> None:
         """Output with only an H1 (degenerate) should not require timestamps."""
-        mock_stream = _make_mock_stream("# Title\n\nFlat content.\n")
-
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.return_value = mock_stream
-            result = restructure("Title", "Channel", two_chunks)
-
+        fake = FakeProvider(response="# Title\n\nFlat content.\n")
+        result = restructure("Title", "Channel", two_chunks, provider=fake)
         assert result == "# Title\n\nFlat content."
 
 
 # ---------------------------------------------------------------------------
-# Retry / backoff
+# _segment_chunks
 # ---------------------------------------------------------------------------
 
-class TestRetry:
-    def test_retries_on_connection_error_and_succeeds(
-        self,
-        two_chunks: list[Chunk],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A transient APIConnectionError on the first call must be retried."""
-        success = _make_mock_stream(_VALID_MARKDOWN)
 
-        attempts = {"count": 0}
-        connection_error = anthropic.APIConnectionError(request=MagicMock())
+def _chunks_of(n: int, chars_each: int, start_offset: float = 0.0) -> list[Chunk]:
+    """Return n Chunk objects, each with `chars_each` characters of text."""
+    return [
+        Chunk(
+            start=start_offset + i * 90.0,
+            end=start_offset + (i + 1) * 90.0,
+            text="x" * chars_each,
+        )
+        for i in range(n)
+    ]
 
-        def stream_side_effect(**_: object) -> MagicMock:
-            attempts["count"] += 1
-            if attempts["count"] < 2:
-                raise connection_error
-            return success
 
-        # Don't actually sleep during tests.
-        monkeypatch.setattr("youtube_summarizer.writer.time.sleep", lambda _s: None)
+class TestSegmentChunks:
+    def test_empty_input_returns_empty(self) -> None:
+        assert _segment_chunks([], 12_000) == []
 
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.side_effect = stream_side_effect
-            result = restructure("Title", "Channel", two_chunks)
+    def test_single_chunk_under_target_stays_alone(self) -> None:
+        chunks = [Chunk(start=0.0, end=90.0, text="hello")]
+        assert _segment_chunks(chunks, 12_000) == [chunks]
 
-        assert attempts["count"] == 2
-        assert isinstance(result, str)
+    def test_single_chunk_over_target_is_not_split(self) -> None:
+        """A chunk larger than the target is never split — it becomes its own segment."""
+        chunks = [Chunk(start=0.0, end=90.0, text="x" * 20_000)]
+        result = _segment_chunks(chunks, 12_000)
+        assert len(result) == 1
+        assert result[0] == chunks
 
-    def test_gives_up_after_max_retries(
-        self,
-        two_chunks: list[Chunk],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """If every attempt raises, the last exception must propagate."""
-        connection_error = anthropic.APIConnectionError(request=MagicMock())
+    def test_two_chunks_that_fit_stay_together(self) -> None:
+        chunks = _chunks_of(2, chars_each=5_000)
+        # 5k + 5k = 10k ≤ 12k → single segment
+        result = _segment_chunks(chunks, 12_000)
+        assert len(result) == 1
+        assert result[0] == chunks
 
-        attempts = {"count": 0}
+    def test_two_chunks_that_overflow_split_into_two(self) -> None:
+        chunks = _chunks_of(2, chars_each=7_000)
+        # 7k + 7k = 14k > 12k → each chunk in its own segment
+        result = _segment_chunks(chunks, 12_000)
+        assert len(result) == 2
+        assert result[0] == [chunks[0]]
+        assert result[1] == [chunks[1]]
 
-        def always_fail(**_: object) -> MagicMock:
-            attempts["count"] += 1
-            raise connection_error
+    def test_groups_multiple_small_chunks_per_segment(self) -> None:
+        # 4 chunks x 3k = 12k total; target = 10k
+        # chunks[0+1+2] = 9k < 10k; adding chunk[3] → 12k > 10k → split at 3+1
+        chunks = _chunks_of(4, chars_each=3_000)
+        result = _segment_chunks(chunks, 10_000)
+        assert len(result) == 2
+        assert len(result[0]) == 3
+        assert len(result[1]) == 1
 
-        monkeypatch.setattr("youtube_summarizer.writer.time.sleep", lambda _s: None)
+    def test_no_empty_segments_produced(self) -> None:
+        chunks = _chunks_of(10, chars_each=1_500)
+        for target in (3_000, 5_000, 12_000, 1):
+            result = _segment_chunks(chunks, target)
+            assert all(len(s) >= 1 for s in result), f"Empty segment produced with target={target}"
 
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.side_effect = always_fail
-            with pytest.raises(anthropic.APIConnectionError):
-                restructure("Title", "Channel", two_chunks)
+    def test_all_chunks_appear_exactly_once(self) -> None:
+        chunks = _chunks_of(7, chars_each=2_000)
+        result = _segment_chunks(chunks, 5_000)
+        flattened = [c for seg in result for c in seg]
+        assert flattened == chunks
 
-        assert attempts["count"] == 3  # _MAX_RETRIES
+    def test_boundary_at_exact_target_does_not_overflow(self) -> None:
+        """Accumulated chars == target is NOT > target — next chunk stays in same segment."""
+        chunks = [
+            Chunk(start=0.0, end=90.0, text="a" * 6_000),  # 6k
+            Chunk(start=90.0, end=180.0, text="b" * 6_000),  # 6k — total 12k == target
+            Chunk(start=180.0, end=270.0, text="c" * 1_000),  # would push to 13k > target
+        ]
+        result = _segment_chunks(chunks, 12_000)
+        # chunks[0]+[1] = 12k, not > 12k → they stay together
+        # chunks[2] would push to 13k > 12k → new segment
+        assert len(result) == 2
+        assert result[0] == [chunks[0], chunks[1]]
+        assert result[1] == [chunks[2]]
 
-    def test_does_not_retry_on_non_retriable_error(
-        self,
-        two_chunks: list[Chunk],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Auth and bad-request errors should NOT be retried (they won't improve)."""
-        attempts = {"count": 0}
+    def test_target_of_one_forces_one_chunk_per_segment(self) -> None:
+        chunks = _chunks_of(3, chars_each=1)
+        result = _segment_chunks(chunks, 1)
+        # Each chunk is 1 char; adding another (1+1=2) > 1 → new segment each time
+        assert len(result) == 3
+        for i, seg in enumerate(result):
+            assert seg == [chunks[i]]
 
-        def always_value_error(**_: object) -> MagicMock:
-            attempts["count"] += 1
-            raise ValueError("not a retriable anthropic error")
 
-        monkeypatch.setattr("youtube_summarizer.writer.time.sleep", lambda _s: None)
+# ---------------------------------------------------------------------------
+# restructure_segmented
+# ---------------------------------------------------------------------------
 
-        with patch("youtube_summarizer.writer.anthropic.Anthropic") as MockClient:
-            MockClient.return_value.messages.stream.side_effect = always_value_error
-            with pytest.raises(ValueError):
-                restructure("Title", "Channel", two_chunks)
 
-        assert attempts["count"] == 1
+class _FirstContinuationProvider:
+    """Returns a proper H1+H2 doc on the first call, only H2 sections on subsequent ones."""
+
+    name = "fake"
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def generate(self, *, system: str, user: str) -> str:
+        self.call_count += 1
+        if self.call_count == 1:
+            return "# My Video\n\n## Opening\n<!-- timestamp: 0.0-90.0 -->\nFirst content."
+        return f"## Section {self.call_count}\n<!-- timestamp: 90.0-180.0 -->\nMore content."
+
+
+class TestRestructureSegmented:
+    def test_first_segment_uses_system_prompt_rest_use_continuation(self) -> None:
+        """Segment 0 must use SYSTEM_PROMPT; segments 1..K must use CONTINUATION_SYSTEM_PROMPT."""
+        chunks = _chunks_of(6, chars_each=5_000)  # 30k > 12k → ≥ 2 segments
+        provider = FakeProvider(response="## S\n<!-- timestamp: 0.0-90.0 -->\nContent.")
+
+        restructure_segmented(title="T", channel="C", chunks=chunks, provider=provider)
+
+        assert len(provider.calls) >= 2
+        assert provider.calls[0]["system"] == SYSTEM_PROMPT
+        for call in provider.calls[1:]:
+            assert call["system"] == CONTINUATION_SYSTEM_PROMPT
+
+    def test_h1_appears_exactly_once_in_combined_output(self) -> None:
+        chunks = _chunks_of(6, chars_each=5_000)
+        provider = _FirstContinuationProvider()
+
+        result = restructure_segmented(
+            title="My Video", channel="Channel", chunks=chunks, provider=provider
+        )
+
+        h1_matches = re.findall(r"^# ", result, re.MULTILINE)
+        assert len(h1_matches) == 1, f"Expected exactly 1 H1, got {len(h1_matches)}"
+
+    def test_on_segment_called_for_every_segment_with_correct_indices(self) -> None:
+        chunks = _chunks_of(6, chars_each=5_000)
+        provider = FakeProvider(response="## S\n<!-- timestamp: 0.0-90.0 -->\nContent.")
+
+        received: list[tuple[int, int]] = []
+
+        def on_seg(index: int, total: int, text: str, seg: list[Chunk]) -> None:
+            received.append((index, total))
+
+        restructure_segmented(
+            title="T", channel="C", chunks=chunks, provider=provider, on_segment=on_seg
+        )
+
+        expected_total = len(provider.calls)
+        assert len(received) == expected_total
+        for i, (idx, total) in enumerate(received):
+            assert idx == i
+            assert total == expected_total
+
+    def test_segment_user_message_contains_segment_header(self) -> None:
+        chunks = _chunks_of(6, chars_each=5_000)
+        provider = FakeProvider(response="## S\n<!-- timestamp: 0.0-90.0 -->\nContent.")
+
+        restructure_segmented(title="T", channel="C", chunks=chunks, provider=provider)
+
+        for i, call in enumerate(provider.calls):
+            assert f"Segment: {i + 1} of" in call["user"]
+
+    def test_first_segment_user_message_instructs_h1(self) -> None:
+        chunks = _chunks_of(6, chars_each=5_000)
+        provider = FakeProvider(response="## S\n<!-- timestamp: 0.0-90.0 -->\nContent.")
+
+        restructure_segmented(title="T", channel="C", chunks=chunks, provider=provider)
+
+        first_user = provider.calls[0]["user"]
+        assert "# H1" in first_user or "H1 title" in first_user
+
+    def test_continuation_segment_user_message_forbids_h1(self) -> None:
+        chunks = _chunks_of(6, chars_each=5_000)
+        provider = FakeProvider(response="## S\n<!-- timestamp: 0.0-90.0 -->\nContent.")
+
+        restructure_segmented(title="T", channel="C", chunks=chunks, provider=provider)
+
+        for call in provider.calls[1:]:
+            user = call["user"]
+            assert "No H1" in user or "no preamble" in user
+
+    def test_empty_chunks_returns_empty_string_with_no_calls(self) -> None:
+        provider = FakeProvider(response="## S\n<!-- timestamp: 0.0-90.0 -->\nContent.")
+        result = restructure_segmented(title="T", channel="C", chunks=[], provider=provider)
+        assert result == ""
+        assert provider.calls == []
+
+    def test_short_video_produces_single_llm_call(self) -> None:
+        chunks = _chunks_of(2, chars_each=3_000)  # 6k < 12k → 1 segment
+        provider = FakeProvider(response="## S\n<!-- timestamp: 0.0-90.0 -->\nContent.")
+
+        restructure_segmented(
+            title="T", channel="C", chunks=chunks, provider=provider, segment_chars=12_000
+        )
+
+        assert len(provider.calls) == 1
+
+    def test_timestamp_contract_violation_warns_not_raises(self) -> None:
+        """A missing-timestamp segment must warn, not abort the whole run."""
+        chunks = _chunks_of(6, chars_each=5_000)
+        # H2 present but NO timestamp comment → contract violation
+        provider = FakeProvider(response="## Section\nContent.")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = restructure_segmented(title="T", channel="C", chunks=chunks, provider=provider)
+
+        assert any("timestamp contract" in str(w.message).lower() for w in caught)
+        assert "Section" in result  # run completed, content is present
+
+    def test_empty_segment_output_warns_and_is_excluded_from_join(self) -> None:
+        call_count = 0
+
+        class PartialProvider:
+            name = "fake"
+            model = "fake-model"
+
+            def generate(self, *, system: str, user: str) -> str:
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    return ""  # simulate empty second segment
+                return "## S\n<!-- timestamp: 0.0-90.0 -->\nContent."
+
+        chunks = _chunks_of(9, chars_each=5_000)  # forces ≥ 3 segments
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = restructure_segmented(
+                title="T", channel="C", chunks=chunks, provider=PartialProvider()
+            )
+
+        assert any("empty output" in str(w.message).lower() for w in caught)
+        # Empty segment must not introduce a blank double-block gap
+        assert "\n\n\n\n" not in result
+
+    def test_parts_joined_with_double_newline(self) -> None:
+        call_num = 0
+
+        class CountingProvider:
+            name = "fake"
+            model = "fake-model"
+
+            def generate(self, *, system: str, user: str) -> str:
+                nonlocal call_num
+                call_num += 1
+                return f"## Sec{call_num}\n<!-- timestamp: 0.0-90.0 -->\nContent {call_num}."
+
+        chunks = _chunks_of(6, chars_each=5_000)
+        result = restructure_segmented(
+            title="T", channel="C", chunks=chunks, provider=CountingProvider()
+        )
+
+        assert "\n\n" in result
+        assert "## Sec1" in result
+        assert "## Sec2" in result

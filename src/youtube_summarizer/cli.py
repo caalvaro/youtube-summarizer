@@ -8,13 +8,17 @@ can be exercised by :class:`typer.testing.CliRunner` without going through
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from pathlib import Path
 
 import typer
 import yt_dlp.utils
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from . import downloader, transcript, writer
 from .config import OUTPUT_DIR, get_settings
+from .providers import LLMProvider, get_provider
 
 app = typer.Typer(help="Turn a YouTube URL into an illustrated-ebook markdown summary.")
 console = Console()
@@ -24,19 +28,47 @@ console = Console()
 def run(
     url: str = typer.Argument(..., help="YouTube video URL"),
     lang: str = typer.Option("en", "--lang", help="Caption language code (default: en)"),
+    provider_name: str | None = typer.Option(
+        None,
+        "--provider",
+        help="LLM provider: 'claude' or 'gemini'. Overrides YT_SUMMARIZER_PROVIDER.",
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Model identifier. Overrides YT_SUMMARIZER_MODEL.",
+    ),
+    segment_chars: int = typer.Option(
+        12_000,
+        "--segment-chars",
+        help=(
+            "Target transcript characters per LLM segment for long videos. "
+            "Videos whose total transcript exceeds this threshold are split into "
+            "multiple segments, each processed by a separate LLM call. "
+            "Default: 12 000."
+        ),
+    ),
 ) -> None:
     """Phase 1: download captions and produce a structured markdown summary."""
+    # Build the provider first — we'd rather fail on misconfiguration BEFORE
+    # spending several seconds in yt-dlp.
     settings = get_settings()
-    if not settings.api_key:
-        console.print(
-            "[red]ANTHROPIC_API_KEY is not set. Add it to .env or your environment.[/red]"
-        )
-        raise typer.Exit(code=2)
+    if provider_name is not None:
+        settings = replace(settings, provider=provider_name)
+    if model is not None:
+        settings = replace(settings, model=model)
 
+    try:
+        provider = get_provider(settings)
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from None
+
+    console.print(f"[cyan]Provider:[/cyan] {provider.name} ([bold]{provider.model}[/bold])")
     console.print(f"[cyan]Fetching captions for[/cyan] {url}")
     try:
         info = downloader.fetch(url, OUTPUT_DIR, lang=lang)
-    except downloader.CaptionsUnavailable as exc:
+    except downloader.CaptionsUnavailableError as exc:
         console.print(f"[yellow]{exc}[/yellow]")
         raise typer.Exit(code=1) from None
     except yt_dlp.utils.YoutubeDLError as exc:
@@ -77,6 +109,8 @@ def run(
                 "duration": info.duration,
                 "url": info.url,
                 "captions_source": info.captions_source,
+                "provider": provider.name,
+                "model": provider.model,
             },
             indent=2,
             ensure_ascii=False,
@@ -84,14 +118,85 @@ def run(
         encoding="utf-8",
     )
 
-    console.print("[cyan]Asking Claude to restructure...[/cyan]")
-    markdown = writer.restructure(
-        title=info.title,
-        channel=info.channel,
-        chunks=chunks,
-    )
-
     summary_path = info.output_dir / "summary.md"
-    summary_path.write_text(markdown, encoding="utf-8")
+    console.print(f"[cyan]Asking {provider.name} to restructure...[/cyan]")
+    _summarise(info, chunks, provider, summary_path, segment_chars=segment_chars)
 
     console.print(f"[green]Done.[/green] Wrote [bold]{summary_path}[/bold]")
+
+
+def _summarise(
+    info: downloader.VideoInfo,
+    chunks: list[transcript.Chunk],
+    provider: LLMProvider,
+    summary_path: Path,
+    *,
+    segment_chars: int = 12_000,
+) -> str:
+    """Run the LLM restructuring step with incremental file writing and a progress bar.
+
+    Truncates ``summary_path`` before the first segment so callers always get a
+    clean file regardless of prior runs. Each segment's output is appended
+    immediately after it completes, so a partial file is left on disk if the
+    run is interrupted mid-way.
+
+    Returns the combined markdown string (same value that was written to disk).
+    """
+    # Truncate / create the file before any LLM call so that a later failure
+    # leaves the file in a known state rather than containing stale content.
+    summary_path.write_text("", encoding="utf-8")
+
+    with Progress(
+        SpinnerColumn(spinner_name="line"), TextColumn("{task.description}"), console=console
+    ) as progress:
+        task_id = progress.add_task("Preparing...", total=None)
+
+        def on_segment(
+            index: int,
+            total: int,
+            text: str,
+            seg: list[transcript.Chunk],
+        ) -> None:
+            start = transcript.format_timestamp(seg[0].start)
+            end = transcript.format_timestamp(seg[-1].end)
+            progress.update(
+                task_id,
+                description=(f"Segment {index + 1} / {total}  [{start}-{end}]"),
+            )
+            with summary_path.open("a", encoding="utf-8") as fh:
+                if index > 0:
+                    fh.write("\n\n")
+                fh.write(text)
+
+        try:
+            return writer.restructure(
+                title=info.title,
+                channel=info.channel,
+                chunks=chunks,
+                provider=provider,
+                segment_chars=segment_chars,
+                on_segment=on_segment,
+            )
+        except ValueError as exc:
+            console.print(f"[red]LLM output rejected: {exc}[/red]")
+            raise typer.Exit(code=1) from None
+        except Exception as exc:
+            # Surface quota/auth errors as clean messages instead of raw tracebacks.
+            exc_str = str(exc)
+            if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
+                if "PerDay" in exc_str or "per_day" in exc_str.lower():
+                    console.print(
+                        "[red]Gemini daily quota exhausted.[/red] "
+                        f"The free tier for [bold]{provider.model}[/bold] has no remaining "
+                        "daily allowance. Options:\n"
+                        "  • Enable billing in Google AI Studio and retry\n"
+                        "  • Switch to a model with free-tier access:  "
+                        "[bold]--model gemini-2.0-flash[/bold]"
+                    )
+                else:
+                    console.print(
+                        "[red]Gemini rate limit hit (429).[/red] "
+                        "The request was throttled. Wait a minute and retry."
+                    )
+                raise typer.Exit(code=1) from None
+            raise

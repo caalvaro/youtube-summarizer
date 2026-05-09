@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 project = "youtube-summarizer"
 author = "Álvaro Carvalho"
-copyright = "2026, Álvaro Carvalho"  # noqa: A001
+copyright = "2026, Álvaro Carvalho"
 
 # Pull version from the package so it stays in sync with pyproject.toml.
 from youtube_summarizer import __version__  # noqa: E402
@@ -27,13 +27,13 @@ release = __version__
 # ---------------------------------------------------------------------------
 
 extensions = [
-    "sphinx.ext.autodoc",       # auto-generate API docs from docstrings
-    "sphinx.ext.napoleon",      # Google-style docstring support
-    "sphinx.ext.intersphinx",   # cross-reference Python stdlib
-    "sphinx.ext.viewcode",      # add source links to API pages
-    "sphinx_autodoc_typehints", # render PEP 484 annotations in docs
-    "sphinx_copybutton",        # one-click copy on code blocks
-    "myst_parser",              # allow .md files alongside .rst
+    "sphinx.ext.autodoc",  # auto-generate API docs from docstrings
+    "sphinx.ext.napoleon",  # Google-style docstring support
+    "sphinx.ext.intersphinx",  # cross-reference Python stdlib
+    "sphinx.ext.viewcode",  # add source links to API pages
+    "sphinx_autodoc_typehints",  # render PEP 484 annotations in docs
+    "sphinx_copybutton",  # one-click copy on code blocks
+    "myst_parser",  # allow .md files alongside .rst
 ]
 
 templates_path = ["_templates"]
@@ -44,8 +44,8 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # ---------------------------------------------------------------------------
 
 autodoc_member_order = "bysource"
-autodoc_typehints = "description"       # put type info in description, not signature
-autodoc_typehints_format = "short"      # use short names (Path instead of pathlib.Path)
+autodoc_typehints = "description"  # put type info in description, not signature
+autodoc_typehints_format = "short"  # use short names (Path instead of pathlib.Path)
 autodoc_default_options = {
     "members": True,
     "undoc-members": False,
@@ -59,7 +59,7 @@ autodoc_default_options = {
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 napoleon_include_init_with_doc = True
-napoleon_use_rtype = False              # rtype already covered by typehints extension
+napoleon_use_rtype = False  # rtype already covered by typehints extension
 
 # ---------------------------------------------------------------------------
 # Intersphinx — link to Python stdlib docs

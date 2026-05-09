@@ -66,6 +66,7 @@ def rolling_vtt_file(tmp_path: Path) -> Path:
 # Pre-built domain objects
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def three_captions() -> list[Caption]:
     """Three simple captions spanning 10 seconds."""

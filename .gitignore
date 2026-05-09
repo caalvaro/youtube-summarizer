@@ -57,3 +57,6 @@ output/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agents
+.claude/

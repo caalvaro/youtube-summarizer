@@ -5,7 +5,7 @@ description = "Turn YouTube videos into illustrated-ebook markdown summaries wit
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Alvaro Carvalho", email = "alvarocarvalho.a@gmail.com" }]
-requires-python = ">=3.12"
+requires-python = ">=3.13,<3.15"
 keywords = ["youtube", "summarizer", "claude", "anthropic", "ai", "transcript", "ebook"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -25,6 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "anthropic>=0.50.0",
+    "google-genai>=0.3.0",
     "yt-dlp>=2024.10.0",
     "python-dotenv>=1.0.0",
     "typer>=0.12.0",
@@ -74,7 +75,6 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.4",
     "pre-commit>=3.7",
-    "types-python-dotenv>=1.0",
 ]
 docs = [
     "sphinx>=7.0",
@@ -115,6 +115,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN", "S101"]
+"src/youtube_summarizer/writer.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["youtube_summarizer"]
@@ -141,7 +142,7 @@ show_error_codes = true
 pretty = true
 
 [[tool.mypy.overrides]]
-module = ["yt_dlp.*"]
+module = ["yt_dlp.*", "google.genai.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
