@@ -97,5 +97,5 @@ before implementation.
 
 ## Reporting security vulnerabilities
 
-Please do **not** open a public issue. See [SECURITY.md](SECURITY.md) for the private
+Please do **not** open a public issue. See [SECURITY.md](https://github.com/caalvaro/youtube-summarizer/blob/main/SECURITY.md) for the private
 disclosure process.
