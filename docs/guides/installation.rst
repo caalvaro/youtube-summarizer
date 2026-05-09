@@ -4,9 +4,19 @@ Installation
 Prerequisites
 -------------
 
-* Python 3.12 or later.
-* An `Anthropic API key <https://console.anthropic.com/>`_.
-* ``ffmpeg`` is **not** required — youtube-summarizer uses captions only, not audio.
+* Python 3.13 or later.
+* ``ffmpeg`` — required only for the ``illustrate`` command (frame extraction).
+  Not needed for Phase 1 summarisation.
+
+  .. code-block:: bash
+
+     # macOS
+     brew install ffmpeg
+
+     # Debian / Ubuntu
+     sudo apt install ffmpeg
+
+  Binaries for all platforms: `ffmpeg.org/download.html <https://ffmpeg.org/download.html>`_.
 
 Install from PyPI
 -----------------
@@ -21,17 +31,38 @@ Or, if you use `uv <https://docs.astral.sh/uv/>`_ (recommended):
 
    uv tool install youtube-summarizer
 
-Configure the API key
----------------------
+Configure API keys
+------------------
 
-The tool reads ``ANTHROPIC_API_KEY`` from the environment.  The easiest way is to
-create a ``.env`` file in the directory where you run the command:
+youtube-summarizer supports two LLM providers. Configure the one you want to use.
+
+**Claude (default)**
+
+Set ``ANTHROPIC_API_KEY``. Get a key at `console.anthropic.com <https://console.anthropic.com/>`_.
 
 .. code-block:: bash
 
-   echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+   echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
 
-Alternatively, export it in your shell profile:
+**Gemini**
+
+Set ``GOOGLE_API_KEY`` and point the provider at Gemini. Get a free key at
+`aistudio.google.com/apikey <https://aistudio.google.com/apikey>`_.
+
+.. code-block:: bash
+
+   echo "GOOGLE_API_KEY=AIza..." >> .env
+   echo "YT_SUMMARIZER_PROVIDER=gemini" >> .env
+
+The easiest way to manage these is a ``.env`` file in the directory where you run the
+command. Copy the bundled example to get started:
+
+.. code-block:: bash
+
+   cp .env.example .env
+   # then edit .env with your actual keys
+
+Alternatively, export the variables in your shell profile so they are always available:
 
 .. code-block:: bash
 
