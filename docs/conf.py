@@ -37,7 +37,14 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    # Internal design / decision docs — not part of user-facing docs
+    "decisions/ADR-001-toolchain.md",
+    "phase2-frame-extraction-design.md",
+]
 
 # ---------------------------------------------------------------------------
 # Autodoc
@@ -67,7 +74,6 @@ napoleon_use_rtype = False  # rtype already covered by typehints extension
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
-    "anthropic": ("https://python.anthropic.com", None),
 }
 
 # ---------------------------------------------------------------------------
