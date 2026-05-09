@@ -38,7 +38,9 @@ def _stub_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     real registry."""
     from youtube_summarizer import providers as providers_module
 
-    monkeypatch.setitem(providers_module._PROVIDERS, "fake", _FakeProvider)
+    monkeypatch.setitem(
+        providers_module._PROVIDERS, "fake", lambda model: _FakeProvider(model=model)
+    )
     # Make 'fake' the default provider for the duration of the test.
     monkeypatch.setenv("YT_SUMMARIZER_PROVIDER", "fake")
     monkeypatch.setattr("youtube_summarizer.config._settings", None)
@@ -56,7 +58,7 @@ class TestHelp:
         assert "youtube" in result.stdout.lower()
 
     def test_help_lists_provider_flag(self) -> None:
-        result = runner.invoke(app, ["--help"])
+        result = runner.invoke(app, ["run", "--help"])
         assert "--provider" in result.stdout
         assert "--model" in result.stdout
 
@@ -70,7 +72,7 @@ class TestErrorExits:
     def test_unknown_provider_exits_two(self, monkeypatch: pytest.MonkeyPatch) -> None:
         result = runner.invoke(
             app,
-            ["https://www.youtube.com/watch?v=fake", "--provider", "totally-bogus"],
+            ["run", "https://www.youtube.com/watch?v=fake", "--provider", "totally-bogus"],
         )
         assert result.exit_code == 2
         assert "Unknown provider" in result.stdout
@@ -80,7 +82,7 @@ class TestErrorExits:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         result = runner.invoke(
             app,
-            ["https://www.youtube.com/watch?v=fake", "--provider", "claude"],
+            ["run", "https://www.youtube.com/watch?v=fake", "--provider", "claude"],
         )
         assert result.exit_code == 2
         assert "ANTHROPIC_API_KEY" in result.stdout
@@ -90,7 +92,7 @@ class TestErrorExits:
             raise CaptionsUnavailableError("no captions for this URL")
 
         monkeypatch.setattr("youtube_summarizer.cli.downloader.fetch", fake_fetch)
-        result = runner.invoke(app, ["https://www.youtube.com/watch?v=fake"])
+        result = runner.invoke(app, ["run", "https://www.youtube.com/watch?v=fake"])
         assert result.exit_code == 1
         assert "no captions for this URL" in result.stdout
 
@@ -99,6 +101,6 @@ class TestErrorExits:
             raise yt_dlp.utils.DownloadError("network unreachable")
 
         monkeypatch.setattr("youtube_summarizer.cli.downloader.fetch", fake_fetch)
-        result = runner.invoke(app, ["https://www.youtube.com/watch?v=fake"])
+        result = runner.invoke(app, ["run", "https://www.youtube.com/watch?v=fake"])
         assert result.exit_code == 1
         assert "Failed to fetch video" in result.stdout

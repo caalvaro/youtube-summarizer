@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-09
+
 ### Added
+- **Phase 2 — frame extraction & illustration.** New `illustrate` subcommand
+  takes a Phase 1 output directory, downloads the video at low resolution via
+  yt-dlp, extracts one representative JPEG frame per `## H2` section using
+  ffmpeg, and produces `summary_illustrated.md` with embedded image references.
+  - `youtube-summarizer illustrate output/<video_id>/`
+  - `--in-place` overwrites `summary.md` instead of writing a separate file.
+  - `--quality` passes a custom yt-dlp format selector (default:
+    `bestvideo[height<=360]`).
+  - `--keep-video` retains the downloaded video after extraction.
+  - `--skip-existing` reuses frames already on disk without re-downloading.
+  - Frames written to `output/<video_id>/frames/section_NNN.jpg`.
 - **Pluggable LLM providers.** New `providers/` package introduces an
   `LLMProvider` Protocol; the orchestrator (`writer.restructure`) is now
   provider-agnostic. Two providers ship in-tree:
@@ -20,6 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `metadata.json` now records the `provider` and `model` used for each run.
 - `py.typed` marker — package is now PEP 561 typed.
 
+### Fixed
+- **ffmpeg subprocess timeout.** `extract_frame()` now passes `timeout=60` to
+  `subprocess.run`. A hung ffmpeg process (corrupted video or stalled network
+  mount) is caught as `subprocess.TimeoutExpired` and re-raised as a
+  `FrameExtractionError` with a clear message instead of blocking forever.
+- **Inverted timestamp guard.** `parse_sections()` now warns and skips any
+  `## H2` section whose `<!-- timestamp: X-Y -->` comment has `Y ≤ X`. Previously
+  such a section would silently pass a negative duration to `pick_timestamp`,
+  returning a timestamp before the section start.
+- **Markdown image alt-text sanitization.** `embed_frames()` strips `[` and `]`
+  from LLM-generated headings before writing `![alt](url)` image lines. A
+  literal `]` in alt text terminates the Markdown image span early, producing
+  invalid output.
+
 ### Changed
 - **Soft-breaking:** `ANTHROPIC_API_KEY` is no longer read by `Settings`.
   Each provider class resolves its own API key (`ANTHROPIC_API_KEY` for
@@ -29,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   injection; default behaviour (factory-built provider) is unchanged.
 - Retry logic moved out of `writer.py` and into the shared `providers.base`
   module so each provider plugs in its own retriable-exception predicate.
+
+### Runtime requirements
+- **ffmpeg** must be on `PATH` to use the `illustrate` command. The command
+  checks for its presence at startup and prints installation instructions if it
+  is missing. No new Python package dependency is introduced.
 
 ### Dependencies
 - Added `google-genai>=0.3.0` (core dep). Can be moved to an optional extra
@@ -59,5 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hidden `<!-- timestamp: start-end -->` comments in each `## H2` section for downstream
   frame-alignment (Phase 2).
 
-[Unreleased]: https://github.com/caalvaro/youtube-summarizer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/caalvaro/youtube-summarizer/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/caalvaro/youtube-summarizer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/caalvaro/youtube-summarizer/releases/tag/v0.1.0
