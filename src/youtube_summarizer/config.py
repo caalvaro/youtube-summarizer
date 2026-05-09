@@ -17,27 +17,30 @@ class Settings:
     """Lazily-resolved runtime configuration.
 
     Reads environment variables on construction (not on import). Capturing env
-    at import time is a classic footgun: `.env` reloads, runtime env mutation,
+    at import time is a classic footgun: ``.env`` reloads, runtime env mutation,
     and tests that mutate env after the package has been imported all silently
     diverge from what the rest of the code sees.
+
+    The provider's API key (``ANTHROPIC_API_KEY``, ``GOOGLE_API_KEY``, etc.)
+    is *not* a Settings field: each provider class is responsible for resolving
+    its own key from the environment, which keeps provider-specific naming
+    conventions out of the shared configuration object.
 
     Tests can override the singleton via::
 
         monkeypatch.setattr(
             "youtube_summarizer.config._settings",
-            Settings(api_key="test-key", model="claude-test"),
+            Settings(provider="claude", model="claude-test"),
         )
     """
 
-    # Default model. Opus 4.7 has high-resolution vision (useful for phase 2 frame
-    # selection) and strong long-context handling. Override with YT_SUMMARIZER_MODEL
-    # if you want to trade quality for cost (e.g. claude-sonnet-4-6).
-    api_key: str | None = field(
-        default_factory=lambda: os.getenv("ANTHROPIC_API_KEY")
-    )
-    model: str = field(
-        default_factory=lambda: os.getenv("YT_SUMMARIZER_MODEL", "claude-opus-4-7")
-    )
+    provider: str = field(default_factory=lambda: os.getenv("YT_SUMMARIZER_PROVIDER", "claude"))
+    """Which LLM provider to use. One of ``"claude"`` or ``"gemini"``."""
+
+    # Treat empty-string env vars as unset so providers fall back to their
+    # built-in default rather than passing ``""`` to the SDK.
+    model: str | None = field(default_factory=lambda: os.getenv("YT_SUMMARIZER_MODEL") or None)
+    """Optional model override. ``None`` means "use the provider's default"."""
 
 
 _settings: Settings | None = None

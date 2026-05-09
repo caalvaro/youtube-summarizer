@@ -19,9 +19,7 @@ class Chunk:
     text: str
 
 
-_TS_RE = re.compile(
-    r"(\d+):(\d+):(\d+)[.,](\d+)\s*-->\s*(\d+):(\d+):(\d+)[.,](\d+)"
-)
+_TS_RE = re.compile(r"(\d+):(\d+):(\d+)[.,](\d+)\s*-->\s*(\d+):(\d+):(\d+)[.,](\d+)")
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -84,9 +82,7 @@ def parse_vtt(path: Path) -> list[Caption]:
     deduped: list[Caption] = []
     for cue in cleaned:
         if deduped and cue.text == deduped[-1].text:
-            deduped[-1] = Caption(
-                start=deduped[-1].start, end=cue.end, text=cue.text
-            )
+            deduped[-1] = Caption(start=deduped[-1].start, end=cue.end, text=cue.text)
             continue
         deduped.append(cue)
 

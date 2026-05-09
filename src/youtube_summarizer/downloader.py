@@ -6,7 +6,7 @@ from pathlib import Path
 import yt_dlp
 
 
-class CaptionsUnavailable(Exception):
+class CaptionsUnavailableError(Exception):
     """Raised when neither manual nor auto-generated captions are available."""
 
 
@@ -25,7 +25,7 @@ class VideoInfo:
 def fetch(url: str, output_root: Path, lang: str = "en") -> VideoInfo:
     """Download captions (manual preferred, auto fallback) and metadata for a YouTube URL.
 
-    Raises :class:`CaptionsUnavailable` if no captions of the requested language exist
+    Raises :class:`CaptionsUnavailableError` if no captions of the requested language exist
     or if yt-dlp claims to have downloaded a track but the .vtt does not land on disk.
     """
     output_root.mkdir(parents=True, exist_ok=True)
@@ -61,7 +61,7 @@ def fetch(url: str, output_root: Path, lang: str = "en") -> VideoInfo:
         chosen_lang = _pick_lang(auto_subs, lang)
         source = "auto"
     if chosen_lang is None:
-        raise CaptionsUnavailable(
+        raise CaptionsUnavailableError(
             f"No '{lang}' captions found for {url} (manual or auto-generated). Skipping."
         )
 
@@ -71,7 +71,7 @@ def fetch(url: str, output_root: Path, lang: str = "en") -> VideoInfo:
     # cross-run confusion impossible.
     captions_path = output_dir / f"{video_id}.{chosen_lang}.vtt"
     if not captions_path.exists():
-        raise CaptionsUnavailable(
+        raise CaptionsUnavailableError(
             f"yt-dlp reported '{chosen_lang}' captions but {captions_path.name} "
             "did not land on disk."
         )
@@ -104,8 +104,6 @@ def _pick_lang(tracks: dict[str, object] | None, lang: str) -> str | None:
     if lang in tracks:
         return lang
     candidates = sorted(
-        code
-        for code in tracks
-        if code.startswith(f"{lang}-") or code.startswith(f"{lang}.")
+        code for code in tracks if code.startswith(f"{lang}-") or code.startswith(f"{lang}.")
     )
     return candidates[0] if candidates else None

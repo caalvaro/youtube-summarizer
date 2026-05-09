@@ -7,14 +7,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from youtube_summarizer.downloader import CaptionsUnavailable, VideoInfo, fetch
-from youtube_summarizer.downloader import _pick_lang  # noqa: PLC2701
-
+from youtube_summarizer.downloader import (
+    CaptionsUnavailableError,
+    VideoInfo,
+    _pick_lang,
+    fetch,
+)
 
 # ---------------------------------------------------------------------------
 # _pick_lang (private helper — tested directly because it encodes
 # non-trivial language-matching logic worth isolating)
 # ---------------------------------------------------------------------------
+
 
 class TestPickLang:
     def test_exact_match(self) -> None:
@@ -57,22 +61,24 @@ class TestPickLang:
 
 
 # ---------------------------------------------------------------------------
-# CaptionsUnavailable
+# CaptionsUnavailableError
 # ---------------------------------------------------------------------------
 
-class TestCaptionsUnavailable:
+
+class TestCaptionsUnavailableError:
     def test_is_exception(self) -> None:
-        exc = CaptionsUnavailable("no captions")
+        exc = CaptionsUnavailableError("no captions")
         assert isinstance(exc, Exception)
 
     def test_message_preserved(self) -> None:
-        exc = CaptionsUnavailable("no captions for https://example.com")
+        exc = CaptionsUnavailableError("no captions for https://example.com")
         assert "https://example.com" in str(exc)
 
 
 # ---------------------------------------------------------------------------
 # fetch — integration path (yt-dlp fully mocked)
 # ---------------------------------------------------------------------------
+
 
 def _make_ydl_info(
     *,
@@ -104,9 +110,11 @@ class TestFetch:
         mock_ydl.__exit__ = MagicMock(return_value=False)
         mock_ydl.extract_info.return_value = info
 
-        with patch("youtube_summarizer.downloader.yt_dlp.YoutubeDL", return_value=mock_ydl):
-            with pytest.raises(CaptionsUnavailable, match="No 'en' captions"):
-                fetch("https://www.youtube.com/watch?v=abc123", tmp_path)
+        with (
+            patch("youtube_summarizer.downloader.yt_dlp.YoutubeDL", return_value=mock_ydl),
+            pytest.raises(CaptionsUnavailableError, match="No 'en' captions"),
+        ):
+            fetch("https://www.youtube.com/watch?v=abc123", tmp_path)
 
     def test_prefers_manual_over_auto_captions(self, tmp_path: Path) -> None:
         """When both manual and auto captions exist, manual is chosen."""
@@ -180,9 +188,11 @@ class TestFetch:
         mock_ydl.__exit__ = MagicMock(return_value=False)
         mock_ydl.extract_info.return_value = info
 
-        with patch("youtube_summarizer.downloader.yt_dlp.YoutubeDL", return_value=mock_ydl):
-            with pytest.raises(CaptionsUnavailable, match="did not land on disk"):
-                fetch("https://www.youtube.com/watch?v=abc123", tmp_path)
+        with (
+            patch("youtube_summarizer.downloader.yt_dlp.YoutubeDL", return_value=mock_ydl),
+            pytest.raises(CaptionsUnavailableError, match="did not land on disk"),
+        ):
+            fetch("https://www.youtube.com/watch?v=abc123", tmp_path)
 
     def test_returns_video_info_dataclass(self, tmp_path: Path) -> None:
         video_id = "abc123"

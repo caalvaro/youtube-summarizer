@@ -14,10 +14,10 @@ from youtube_summarizer.transcript import (
     to_chunks,
 )
 
-
 # ---------------------------------------------------------------------------
 # format_timestamp
 # ---------------------------------------------------------------------------
+
 
 class TestFormatTimestamp:
     def test_seconds_only(self) -> None:
@@ -41,6 +41,7 @@ class TestFormatTimestamp:
 # parse_vtt
 # ---------------------------------------------------------------------------
 
+
 class TestParseVtt:
     def test_parses_three_clean_cues(self, simple_vtt_file: Path) -> None:
         captions = parse_vtt(simple_vtt_file)
@@ -61,9 +62,9 @@ class TestParseVtt:
         texts = [c.text for c in captions]
         # No cue should be a prefix of the next one
         for i in range(len(texts) - 1):
-            assert not texts[i + 1].startswith(texts[i]), (
-                f"Cue {i} is a prefix of cue {i+1}: {texts[i]!r}"
-            )
+            assert not texts[i + 1].startswith(
+                texts[i]
+            ), f"Cue {i} is a prefix of cue {i + 1}: {texts[i]!r}"
 
     def test_empty_vtt_returns_empty_list(self, tmp_path: Path) -> None:
         p = tmp_path / "empty.vtt"
@@ -89,9 +90,7 @@ class TestParseVtt:
         for cap in captions:
             assert isinstance(cap, Caption)
 
-    def test_rolling_dedup_handles_recase_and_repunctuation(
-        self, tmp_path: Path
-    ) -> None:
+    def test_rolling_dedup_handles_recase_and_repunctuation(self, tmp_path: Path) -> None:
         """Rolling cues that re-emit the same words with case or whitespace
         differences must still be deduped.
 
@@ -120,36 +119,30 @@ class TestParseVtt:
 # to_chunks
 # ---------------------------------------------------------------------------
 
+
 class TestToChunks:
     def test_empty_input_returns_empty(self) -> None:
         assert to_chunks([]) == []
 
-    def test_single_caption_becomes_one_chunk(
-        self, three_captions: list[Caption]
-    ) -> None:
+    def test_single_caption_becomes_one_chunk(self, three_captions: list[Caption]) -> None:
         single = [three_captions[0]]
         chunks = to_chunks(single)
         assert len(chunks) == 1
         assert chunks[0].text == three_captions[0].text
 
-    def test_short_captions_merge_into_one_chunk(
-        self, three_captions: list[Caption]
-    ) -> None:
+    def test_short_captions_merge_into_one_chunk(self, three_captions: list[Caption]) -> None:
         # 10 seconds total, target is 90 — all in one chunk
         chunks = to_chunks(three_captions, target_seconds=90.0)
         assert len(chunks) == 1
 
-    def test_chunk_text_joins_captions(
-        self, three_captions: list[Caption]
-    ) -> None:
+    def test_chunk_text_joins_captions(self, three_captions: list[Caption]) -> None:
         chunks = to_chunks(three_captions, target_seconds=90.0)
         combined = " ".join(c.text for c in three_captions)
         assert chunks[0].text == combined
 
     def test_splits_into_multiple_chunks(self) -> None:
         captions = [
-            Caption(start=float(i * 10), end=float(i * 10 + 9), text=f"Cue {i}")
-            for i in range(20)
+            Caption(start=float(i * 10), end=float(i * 10 + 9), text=f"Cue {i}") for i in range(20)
         ]
         # 200 seconds total, target 90 → expect 3 chunks
         chunks = to_chunks(captions, target_seconds=90.0)
@@ -157,16 +150,13 @@ class TestToChunks:
 
     def test_chunk_timestamps_are_contiguous(self) -> None:
         captions = [
-            Caption(start=float(i * 10), end=float(i * 10 + 9), text=f"Cue {i}")
-            for i in range(20)
+            Caption(start=float(i * 10), end=float(i * 10 + 9), text=f"Cue {i}") for i in range(20)
         ]
         chunks = to_chunks(captions, target_seconds=90.0)
         for chunk in chunks:
             assert chunk.start < chunk.end
 
-    def test_returns_chunk_dataclasses(
-        self, three_captions: list[Caption]
-    ) -> None:
+    def test_returns_chunk_dataclasses(self, three_captions: list[Caption]) -> None:
         chunks = to_chunks(three_captions)
         for chunk in chunks:
             assert isinstance(chunk, Chunk)
