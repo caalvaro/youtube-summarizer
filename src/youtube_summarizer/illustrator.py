@@ -80,7 +80,7 @@ class Section:
     """0-based position among all H2 headings in the document."""
 
     heading: str
-    """The H2 text without the leading ``## `` prefix."""
+    """The H2 text without the leading ``##`` prefix."""
 
     ts_start: float
     """Section start in seconds."""
